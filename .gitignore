@@ -34,3 +34,6 @@ go.work.sum
 # local notes
 CLAUDE.md
 plan.md
+
+# build output
+/ghtidy
