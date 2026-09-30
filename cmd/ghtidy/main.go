@@ -1,10 +1,12 @@
 package main
 
 import (
+	"context"
 	"fmt"
 	"os"
 
 	"github.com/DYLANeay/ghtidy/internal/auth"
+	"github.com/DYLANeay/ghtidy/internal/github"
 )
 
 // overridden at build time with -ldflags "-X main.version=..."
@@ -28,7 +30,15 @@ func run() error {
 		return err
 	}
 
-	// we dont print the token for obvious sec reason
-	fmt.Println("token found, length:", len(token))
+	client := github.NewClient(token)
+	repos, err := client.ListOwned(context.Background())
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%d repositories:\n", len(repos))
+	for _, repo := range repos {
+		fmt.Printf("- %s (%s)\n", repo.FullName, repo.Visibility)
+	}
 	return nil
 }
