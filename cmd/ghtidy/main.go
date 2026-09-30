@@ -1,12 +1,14 @@
 package main
 
 import (
-	"context"
 	"fmt"
 	"os"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/DYLANeay/ghtidy/internal/auth"
 	"github.com/DYLANeay/ghtidy/internal/github"
+	"github.com/DYLANeay/ghtidy/internal/tui"
 )
 
 // overridden at build time with -ldflags "-X main.version=..."
@@ -31,14 +33,8 @@ func run() error {
 	}
 
 	client := github.NewClient(token)
-	repos, err := client.ListOwned(context.Background())
-	if err != nil {
-		return err
-	}
+	model := tui.NewModel(client)
 
-	fmt.Printf("%d repositories:\n", len(repos))
-	for _, repo := range repos {
-		fmt.Printf("- %s (%s)\n", repo.FullName, repo.Visibility)
-	}
-	return nil
+	_, err = tea.NewProgram(model).Run()
+	return err
 }
