@@ -4,8 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 )
@@ -158,5 +160,114 @@ func TestListOwnedReturnsApiError(t *testing.T) {
 	_, err = client.ListOwned(context.Background())
 	if err == nil {
 		t.Fatal("expected an error on 401, got nil")
+	}
+}
+
+// editServer records the last request and answers with the given status
+func editServer(t *testing.T, status int, gotMethod, gotPath, gotBody *string) *Client {
+	t.Helper()
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, err := io.ReadAll(r.Body)
+		if err != nil {
+			t.Errorf("read body: %v", err)
+		}
+		*gotMethod, *gotPath, *gotBody = r.Method, r.URL.Path, string(body)
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(`{"message":"nope"}`))
+	}))
+	t.Cleanup(server.Close)
+
+	client, err := newClientWithBaseURL("fake-token", server.URL+"/")
+	if err != nil {
+		t.Fatalf("build client: %v", err)
+	}
+	return client
+}
+
+func TestArchiveSendsPatch(t *testing.T) {
+	var method, path, body string
+	client := editServer(t, http.StatusOK, &method, &path, &body)
+
+	if err := client.Archive(context.Background(), "dylan", "alpha"); err != nil {
+		t.Fatalf("Archive: %v", err)
+	}
+
+	if method != http.MethodPatch || path != "/api/v3/repos/dylan/alpha" {
+		t.Errorf("unexpected request: %s %s", method, path)
+	}
+	if !strings.Contains(body, `"archived":true`) {
+		t.Errorf("body should archive the repo, got %s", body)
+	}
+}
+
+func TestSetVisibilitySendsVisibility(t *testing.T) {
+	var method, path, body string
+	client := editServer(t, http.StatusOK, &method, &path, &body)
+
+	if err := client.SetVisibility(context.Background(), "dylan", "alpha", VisibilityPrivate); err != nil {
+		t.Fatalf("SetVisibility: %v", err)
+	}
+
+	if method != http.MethodPatch || path != "/api/v3/repos/dylan/alpha" {
+		t.Errorf("unexpected request: %s %s", method, path)
+	}
+	if !strings.Contains(body, `"visibility":"private"`) {
+		t.Errorf("body should set visibility, got %s", body)
+	}
+}
+
+func TestSetVisibilityRejectsInternal(t *testing.T) {
+	var method, path, body string
+	client := editServer(t, http.StatusOK, &method, &path, &body)
+
+	err := client.SetVisibility(context.Background(), "dylan", "alpha", VisibilityInternal)
+
+	if err == nil {
+		t.Fatal("expected an error for internal visibility, got nil")
+	}
+	if method != "" {
+		t.Errorf("no request should be sent, got %s %s", method, path)
+	}
+}
+
+func TestDeleteSendsDelete(t *testing.T) {
+	var method, path, body string
+	client := editServer(t, http.StatusNoContent, &method, &path, &body)
+
+	if err := client.Delete(context.Background(), "dylan", "alpha"); err != nil {
+		t.Fatalf("Delete: %v", err)
+	}
+
+	if method != http.MethodDelete || path != "/api/v3/repos/dylan/alpha" {
+		t.Errorf("unexpected request: %s %s", method, path)
+	}
+}
+
+func TestDeleteForbiddenMentionsScope(t *testing.T) {
+	var method, path, body string
+	client := editServer(t, http.StatusForbidden, &method, &path, &body)
+
+	err := client.Delete(context.Background(), "dylan", "alpha")
+
+	if err == nil {
+		t.Fatal("expected an error on 403, got nil")
+	}
+	if !strings.Contains(err.Error(), "delete_repo") {
+		t.Errorf("error should mention the delete_repo scope, got %v", err)
+	}
+}
+
+func TestArchiveReturnsApiError(t *testing.T) {
+	var method, path, body string
+	client := editServer(t, http.StatusNotFound, &method, &path, &body)
+
+	err := client.Archive(context.Background(), "dylan", "alpha")
+
+	if err == nil {
+		t.Fatal("expected an error on 404, got nil")
+	}
+	if !strings.Contains(err.Error(), "archive dylan/alpha") {
+		t.Errorf("error should name the action and repo, got %v", err)
 	}
 }
