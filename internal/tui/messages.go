@@ -2,6 +2,7 @@
 package tui
 
 import (
+	"github.com/DYLANeay/ghtidy/internal/actions"
 	"github.com/DYLANeay/ghtidy/internal/github"
 )
 
@@ -14,3 +15,11 @@ type reposLoadedMsg struct {
 type errMsg struct {
 	err error
 }
+
+// actionResultMsg carries the outcome of one repo while a bulk action runs
+type actionResultMsg struct {
+	result actions.Result
+}
+
+// actionDoneMsg tells the bulk action has handled every repo
+type actionDoneMsg struct{}

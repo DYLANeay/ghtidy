@@ -21,6 +21,18 @@ func (f fakeService) ListOwned(ctx context.Context) ([]github.Repo, error) {
 	return f.repos, f.err
 }
 
+func (f fakeService) Archive(ctx context.Context, owner, name string) error {
+	return f.err
+}
+
+func (f fakeService) SetVisibility(ctx context.Context, owner, name, visibility string) error {
+	return f.err
+}
+
+func (f fakeService) Delete(ctx context.Context, owner, name string) error {
+	return f.err
+}
+
 // sampleRepos gives three repos to drive the tests
 func sampleRepos() []github.Repo {
 	return []github.Repo{

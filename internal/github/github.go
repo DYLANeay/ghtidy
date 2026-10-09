@@ -3,7 +3,9 @@ package github
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	gh "github.com/google/go-github/v76/github"
@@ -31,9 +33,22 @@ type Repo struct {
 	CreatedAt   time.Time
 }
 
-// RepoService lists the repositories the authenticated user can act on
-type RepoService interface {
+// RepoLister lists the repositories the authenticated user can act on
+type RepoLister interface {
 	ListOwned(ctx context.Context) ([]Repo, error)
+}
+
+// RepoEditor changes or removes one repository
+type RepoEditor interface {
+	Archive(ctx context.Context, owner, name string) error
+	SetVisibility(ctx context.Context, owner, name, visibility string) error
+	Delete(ctx context.Context, owner, name string) error
+}
+
+// RepoService is everything the app needs from github
+type RepoService interface {
+	RepoLister
+	RepoEditor
 }
 
 // Client talks to the real github api through go-github
@@ -80,6 +95,47 @@ func (c *Client) ListOwned(ctx context.Context) ([]Repo, error) {
 		}
 		opts.Page = resp.NextPage
 	}
+}
+
+// Archive marks a repository as archived (read only)
+func (c *Client) Archive(ctx context.Context, owner, name string) error {
+	update := &gh.Repository{Archived: gh.Ptr(true)}
+	if _, _, err := c.api.Repositories.Edit(ctx, owner, name, update); err != nil {
+		return fmt.Errorf("archive %s/%s: %w", owner, name, err)
+	}
+	return nil
+}
+
+// SetVisibility makes a repository public or private
+func (c *Client) SetVisibility(ctx context.Context, owner, name, visibility string) error {
+	if visibility != VisibilityPublic && visibility != VisibilityPrivate {
+		return fmt.Errorf("set visibility %s/%s: unsupported visibility %q", owner, name, visibility)
+	}
+	update := &gh.Repository{Visibility: gh.Ptr(visibility)}
+	if _, _, err := c.api.Repositories.Edit(ctx, owner, name, update); err != nil {
+		return fmt.Errorf("set visibility %s/%s: %w", owner, name, err)
+	}
+	return nil
+}
+
+// Delete permanently removes a repository, the token needs the delete_repo scope
+func (c *Client) Delete(ctx context.Context, owner, name string) error {
+	if _, err := c.api.Repositories.Delete(ctx, owner, name); err != nil {
+		if isForbidden(err) {
+			return fmt.Errorf("delete %s/%s: token is missing the delete_repo scope: %w", owner, name, err)
+		}
+		return fmt.Errorf("delete %s/%s: %w", owner, name, err)
+	}
+	return nil
+}
+
+// isForbidden tells whether the api answered 403
+func isForbidden(err error) bool {
+	var apiErr *gh.ErrorResponse
+	if !errors.As(err, &apiErr) || apiErr.Response == nil {
+		return false
+	}
+	return apiErr.Response.StatusCode == http.StatusForbidden
 }
 
 // repoFromAPI converts the go-github type into our own Repo

@@ -6,15 +6,22 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/DYLANeay/ghtidy/internal/actions"
 	"github.com/DYLANeay/ghtidy/internal/github"
 )
 
-// mode tells whether keys drive the list or the filter input
+// mode tells which screen the keys are driving
 type mode int
 
 const (
 	modeList mode = iota
 	modeFilter
+	// y/n question before a bulk action
+	modeConfirm
+	// the user must type "delete" before repos are removed
+	modeConfirmDelete
+	modeRunning
+	modeReport
 )
 
 // Model is the whole state of the repo list screen
@@ -29,6 +36,16 @@ type Model struct {
 	mode     mode
 	loading  bool
 	err      error
+
+	// bulk actions, keyed by the list key that triggers them
+	actions      map[string]actions.Action
+	pending      actions.Action
+	targets      []github.Repo
+	confirmInput string
+	results      []actions.Result
+	resultsCh    <-chan actions.Result
+	// one line feedback shown under the list
+	notice string
 }
 
 // NewModel builds the initial model, ready to fetch repositories
@@ -37,6 +54,11 @@ func NewModel(service github.RepoService) Model {
 		service:  service,
 		selected: make(map[string]bool),
 		loading:  true,
+		actions: map[string]actions.Action{
+			"r": actions.NewArchive(service),
+			"v": actions.NewToggleVisibility(service),
+			"d": actions.NewDelete(service),
+		},
 	}
 }
 
@@ -51,25 +73,54 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case reposLoadedMsg:
 		m.repos = msg.repos
 		m.applyFilter()
+		m.pruneSelection()
 		m.loading = false
 		return m, nil
 	case errMsg:
 		m.err = msg.err
 		m.loading = false
 		return m, nil
+	case actionResultMsg:
+		m.results = append(m.results, msg.result)
+		return m, waitForResult(m.resultsCh)
+	case actionDoneMsg:
+		m.mode = modeReport
+		// reload so the list shows the new state of the repos
+		return m, fetchRepos(m.service)
 
 	case tea.KeyMsg:
-		if m.mode == modeFilter {
-			return m.updateFilter(msg)
-		}
-		return m.updateList(msg)
+		return m.updateKey(msg)
 	}
 	return m, nil
 }
 
+// updateKey sends a key press to the handler of the current mode
+func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch m.mode {
+	case modeFilter:
+		return m.updateFilter(msg)
+	case modeConfirm:
+		return m.updateConfirm(msg)
+	case modeConfirmDelete:
+		return m.updateConfirmDelete(msg)
+	case modeRunning:
+		return m.updateRunning(msg)
+	case modeReport:
+		return m.updateReport(msg)
+	}
+	return m.updateList(msg)
+}
+
 // updateList handles keys while navigating the list
 func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
-	switch msg.String() {
+	m.notice = ""
+	key := msg.String()
+	if action, ok := m.actions[key]; ok {
+		m.requestAction(action)
+		return m, nil
+	}
+
+	switch key {
 	case "q", "ctrl+c":
 		return m, tea.Quit
 	case "up", "k":
@@ -150,26 +201,43 @@ func (m Model) selectedCount() int {
 	return len(m.selected)
 }
 
-// applyFilter recomputes the visible repos from the current filter text
-func (m *Model) applyFilter() {
-	if m.filter == "" {
-		m.filtered = m.repos
-		return
-	}
-	// fresh slice on purpose: reusing the old backing array would overwrite
-	// m.repos while we iterate on it, since filtered aliases it
-	filtered := make([]github.Repo, 0, len(m.repos))
-	needle := strings.ToLower(m.filter)
+// pruneSelection drops selected repos that no longer exist, e.g. after a delete
+func (m *Model) pruneSelection() {
+	existing := make(map[string]bool, len(m.repos))
 	for _, repo := range m.repos {
-		if strings.Contains(strings.ToLower(repo.FullName), needle) {
-			filtered = append(filtered, repo)
+		existing[repo.FullName] = true
+	}
+	for name := range m.selected {
+		if !existing[name] {
+			delete(m.selected, name)
 		}
 	}
-	m.filtered = filtered
+}
+
+// applyFilter recomputes the visible repos from the current filter text
+func (m *Model) applyFilter() {
+	m.filtered = m.repos
+	if m.filter != "" {
+		m.filtered = m.matchingRepos()
+	}
 	// keep the cursor inside the visible list
 	if m.cursor >= len(m.filtered) {
 		m.cursor = max(0, len(m.filtered)-1)
 	}
+}
+
+// matchingRepos returns the repos whose name contains the filter text
+func (m Model) matchingRepos() []github.Repo {
+	// fresh slice on purpose: reusing the old backing array would overwrite
+	// m.repos while we iterate on it, since filtered aliases it
+	matching := make([]github.Repo, 0, len(m.repos))
+	needle := strings.ToLower(m.filter)
+	for _, repo := range m.repos {
+		if strings.Contains(strings.ToLower(repo.FullName), needle) {
+			matching = append(matching, repo)
+		}
+	}
+	return matching
 }
 
 // View renders the whole screen as a string
@@ -187,6 +255,25 @@ func (m Model) View() string {
 		return b.String()
 	}
 
+	switch m.mode {
+	case modeConfirm:
+		b.WriteString(m.viewConfirm())
+	case modeConfirmDelete:
+		b.WriteString(m.viewConfirmDelete())
+	case modeRunning:
+		b.WriteString(m.viewRunning())
+	case modeReport:
+		b.WriteString(m.viewReport())
+	default:
+		b.WriteString(m.viewList())
+	}
+	return b.String()
+}
+
+// viewList renders the repos with their selection marks and the help line
+func (m Model) viewList() string {
+	var b strings.Builder
+
 	for i, repo := range m.filtered {
 		cursor := " "
 		if i == m.cursor {
@@ -203,11 +290,15 @@ func (m Model) View() string {
 	}
 
 	b.WriteString("\n")
+	if m.notice != "" {
+		fmt.Fprintf(&b, "%s\n", m.notice)
+	}
 	if m.mode == modeFilter {
 		fmt.Fprintf(&b, "filter: %s\n", m.filter)
 	} else {
 		fmt.Fprintf(&b, "%d selected\n", m.selectedCount())
 		b.WriteString("j/k or arrows: move | space: toggle | a: select all | A: clear | /: filter | esc: clear filter | q: quit\n")
+		b.WriteString("r: archive | v: toggle visibility | d: delete\n")
 	}
 	return b.String()
 }
