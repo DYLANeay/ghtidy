@@ -20,6 +20,17 @@ func fetchRepos(service github.RepoService) tea.Cmd {
 	}
 }
 
+// fetchDetail loads the detail of one repo in the background
+func fetchDetail(service github.RepoService, repo github.Repo) tea.Cmd {
+	return func() tea.Msg {
+		detail, err := service.Detail(context.Background(), repo.Owner, repo.Name)
+		if err != nil {
+			return detailErrMsg{fullName: repo.FullName, err: err}
+		}
+		return detailLoadedMsg{detail: detail}
+	}
+}
+
 // waitForResult blocks on the results channel until one repo is done,
 // it has to be scheduled again after each result to keep reading
 func waitForResult(results <-chan actions.Result) tea.Cmd {

@@ -13,8 +13,10 @@ import (
 
 // fakeService returns fixed repos without any network call
 type fakeService struct {
-	repos []github.Repo
-	err   error
+	repos     []github.Repo
+	err       error
+	detail    github.RepoDetail
+	detailErr error
 }
 
 func (f fakeService) ListOwned(ctx context.Context) ([]github.Repo, error) {
@@ -31,6 +33,10 @@ func (f fakeService) SetVisibility(ctx context.Context, owner, name, visibility 
 
 func (f fakeService) Delete(ctx context.Context, owner, name string) error {
 	return f.err
+}
+
+func (f fakeService) Detail(ctx context.Context, owner, name string) (github.RepoDetail, error) {
+	return f.detail, f.detailErr
 }
 
 // sampleRepos gives three repos to drive the tests
