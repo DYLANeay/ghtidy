@@ -22,6 +22,8 @@ type Model struct {
 	service  github.RepoService
 	repos    []github.Repo
 	filtered []github.Repo
+	// keyed by full name so it survives filtering
+	selected map[string]bool
 	cursor   int
 	filter   string
 	mode     mode
@@ -32,8 +34,9 @@ type Model struct {
 // NewModel builds the initial model, ready to fetch repositories
 func NewModel(service github.RepoService) Model {
 	return Model{
-		service: service,
-		loading: true,
+		service:  service,
+		selected: make(map[string]bool),
+		loading:  true,
 	}
 }
 
@@ -77,6 +80,12 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 		}
+	case " ":
+		m.toggleCurrent()
+	case "a":
+		m.selectAllVisible()
+	case "A":
+		m.clearSelection()
 	case "/":
 		m.mode = modeFilter
 		m.filter = ""
@@ -106,6 +115,39 @@ func (m Model) updateFilter(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		m.applyFilter()
 	}
 	return m, nil
+}
+
+// toggleCurrent flips the selection of the repo under the cursor
+func (m *Model) toggleCurrent() {
+	if len(m.filtered) == 0 {
+		return
+	}
+	name := m.filtered[m.cursor].FullName
+	if m.selected[name] {
+		delete(m.selected, name)
+	} else {
+		m.selected[name] = true
+	}
+}
+
+// selectAllVisible selects every repo matching the current filter
+func (m *Model) selectAllVisible() {
+	for _, repo := range m.filtered {
+		m.selected[repo.FullName] = true
+	}
+}
+
+// clearSelection forgets every selected repo, visible or not
+func (m *Model) clearSelection() {
+	m.selected = make(map[string]bool)
+}
+
+func (m Model) isSelected(repo github.Repo) bool {
+	return m.selected[repo.FullName]
+}
+
+func (m Model) selectedCount() int {
+	return len(m.selected)
 }
 
 // applyFilter recomputes the visible repos from the current filter text
@@ -150,7 +192,11 @@ func (m Model) View() string {
 		if i == m.cursor {
 			cursor = ">"
 		}
-		fmt.Fprintf(&b, "%s %s (%s)\n", cursor, repo.FullName, repo.Visibility)
+		mark := "[ ]"
+		if m.isSelected(repo) {
+			mark = "[x]"
+		}
+		fmt.Fprintf(&b, "%s %s %s (%s)\n", cursor, mark, repo.FullName, repo.Visibility)
 	}
 	if len(m.filtered) == 0 {
 		b.WriteString("  no repository matches\n")
@@ -160,7 +206,8 @@ func (m Model) View() string {
 	if m.mode == modeFilter {
 		fmt.Fprintf(&b, "filter: %s\n", m.filter)
 	} else {
-		b.WriteString("j/k or arrows: move | /: filter | esc: clear filter | q: quit\n")
+		fmt.Fprintf(&b, "%d selected\n", m.selectedCount())
+		b.WriteString("j/k or arrows: move | space: toggle | a: select all | A: clear | /: filter | esc: clear filter | q: quit\n")
 	}
 	return b.String()
 }

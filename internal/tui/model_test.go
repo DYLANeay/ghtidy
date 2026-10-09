@@ -165,3 +165,106 @@ func enterFilter(t *testing.T, m Model, text string) Model {
 	}
 	return m
 }
+
+// loadedModel returns a model with the sample repos loaded
+func loadedModel() Model {
+	updated, _ := NewModel(fakeService{}).Update(reposLoadedMsg{repos: sampleRepos()})
+	return updated.(Model)
+}
+
+// press sends one key message and returns the updated model
+func press(t *testing.T, m Model, msg tea.KeyMsg) Model {
+	t.Helper()
+	updated, _ := m.Update(msg)
+	return updated.(Model)
+}
+
+var (
+	keySpace  = tea.KeyMsg{Type: tea.KeySpace, Runes: []rune{' '}}
+	keyA      = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("a")}
+	keyShiftA = tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("A")}
+)
+
+func TestSpaceTogglesSelection(t *testing.T) {
+	m := press(t, loadedModel(), keySpace)
+	if !m.selected["dylan/alpha"] || m.selectedCount() != 1 {
+		t.Errorf("expected only dylan/alpha selected, got %v", m.selected)
+	}
+
+	m = press(t, m, keySpace)
+	if m.selectedCount() != 0 {
+		t.Errorf("expected empty selection, got %v", m.selected)
+	}
+}
+
+func TestSelectAllSelectsOnlyVisible(t *testing.T) {
+	m := enterFilter(t, loadedModel(), "alp")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEnter})
+	m = press(t, m, keyA)
+
+	if m.selectedCount() != 1 || !m.selected["dylan/alpha"] {
+		t.Errorf("expected only dylan/alpha selected, got %v", m.selected)
+	}
+}
+
+func TestSelectionSurvivesFilterChange(t *testing.T) {
+	m := press(t, loadedModel(), keySpace)
+
+	m = enterFilter(t, m, "beta")
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyEsc})
+
+	if !m.selected["dylan/alpha"] {
+		t.Errorf("dylan/alpha should still be selected, got %v", m.selected)
+	}
+}
+
+func TestShiftAClearsSelection(t *testing.T) {
+	m := press(t, loadedModel(), keyA)
+	if m.selectedCount() != 3 {
+		t.Fatalf("expected 3 selected, got %d", m.selectedCount())
+	}
+
+	m = press(t, m, keyShiftA)
+	if m.selectedCount() != 0 {
+		t.Errorf("expected empty selection, got %v", m.selected)
+	}
+}
+
+func TestToggleOnEmptyListDoesNothing(t *testing.T) {
+	m := NewModel(fakeService{})
+
+	m = press(t, m, keySpace)
+
+	if m.selectedCount() != 0 {
+		t.Errorf("expected empty selection, got %v", m.selected)
+	}
+}
+
+func TestViewShowsMarkersAndCount(t *testing.T) {
+	m := press(t, loadedModel(), keySpace)
+	view := m.View()
+
+	if !strings.Contains(view, "> [x] dylan/alpha") {
+		t.Errorf("expected a checked marker on alpha, got:\n%s", view)
+	}
+	if !strings.Contains(view, "  [ ] dylan/beta") {
+		t.Errorf("expected an unchecked marker on beta, got:\n%s", view)
+	}
+	if !strings.Contains(view, "1 selected") {
+		t.Errorf("expected the selected count, got:\n%s", view)
+	}
+}
+
+func TestSelectKeysAreTextInFilterMode(t *testing.T) {
+	m := loadedModel()
+	m = press(t, m, tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("/")})
+	m = press(t, m, keyA)
+	m = press(t, m, keyShiftA)
+
+	if m.filter != "aA" {
+		t.Errorf("expected filter %q, got %q", "aA", m.filter)
+	}
+	if m.selectedCount() != 0 {
+		t.Errorf("nothing should be selected, got %v", m.selected)
+	}
+}
