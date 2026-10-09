@@ -23,3 +23,14 @@ type actionResultMsg struct {
 
 // actionDoneMsg tells the bulk action has handled every repo
 type actionDoneMsg struct{}
+
+// detailLoadedMsg carries the detail of the repo the user opened
+type detailLoadedMsg struct {
+	detail github.RepoDetail
+}
+
+// detailErrMsg reports a failed detail fetch, fullName tells which repo it was for
+type detailErrMsg struct {
+	fullName string
+	err      error
+}

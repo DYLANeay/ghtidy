@@ -271,3 +271,173 @@ func TestArchiveReturnsApiError(t *testing.T) {
 		t.Errorf("error should name the action and repo, got %v", err)
 	}
 }
+
+const detailRepoJSON = `{
+	"name": "alpha",
+	"full_name": "dylan/alpha",
+	"owner": {"login": "dylan"},
+	"private": true,
+	"description": "first repo",
+	"html_url": "https://github.com/dylan/alpha",
+	"clone_url": "https://github.com/dylan/alpha.git",
+	"ssh_url": "git@github.com:dylan/alpha.git",
+	"language": "Go",
+	"pushed_at": "2026-09-01T12:00:00Z",
+	"created_at": "2024-01-10T09:00:00Z"
+}`
+
+// detailServer answers the three endpoints behind Detail and records the commits query
+func detailServer(t *testing.T, languages, commits string, commitsStatus int, gotQuery *string) *Client {
+	t.Helper()
+	mux := http.NewServeMux()
+	mux.HandleFunc("/api/v3/repos/dylan/alpha", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(detailRepoJSON))
+	})
+	mux.HandleFunc("/api/v3/repos/dylan/alpha/languages", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(languages))
+	})
+	mux.HandleFunc("/api/v3/repos/dylan/alpha/commits", func(w http.ResponseWriter, r *http.Request) {
+		if gotQuery != nil {
+			*gotQuery = r.URL.RawQuery
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(commitsStatus)
+		_, _ = w.Write([]byte(commits))
+	})
+	server := httptest.NewServer(mux)
+	t.Cleanup(server.Close)
+
+	client, err := newClientWithBaseURL("fake-token", server.URL+"/")
+	if err != nil {
+		t.Fatalf("build client: %v", err)
+	}
+	return client
+}
+
+const oneCommitJSON = `[{
+	"sha": "abcdef1234567890",
+	"commit": {
+		"message": "fix: first line\n\nlonger body",
+		"author": {"name": "Dylan", "date": "2026-09-01T12:00:00Z"}
+	}
+}]`
+
+func TestDetailMapsFields(t *testing.T) {
+	client := detailServer(t, `{"Go": 900}`, oneCommitJSON, http.StatusOK, nil)
+
+	detail, err := client.Detail(context.Background(), "dylan", "alpha")
+	if err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+
+	if detail.Repo.FullName != "dylan/alpha" || detail.Repo.Visibility != VisibilityPrivate {
+		t.Errorf("unexpected repo: %+v", detail.Repo)
+	}
+	if detail.CloneURL != "https://github.com/dylan/alpha.git" {
+		t.Errorf("clone url: got %q", detail.CloneURL)
+	}
+	if detail.SSHURL != "git@github.com:dylan/alpha.git" {
+		t.Errorf("ssh url: got %q", detail.SSHURL)
+	}
+	if detail.PrimaryLanguage != "Go" {
+		t.Errorf("primary language: got %q", detail.PrimaryLanguage)
+	}
+	if len(detail.Languages) != 1 || detail.Languages[0] != (Language{Name: "Go", Bytes: 900}) {
+		t.Errorf("languages: got %+v", detail.Languages)
+	}
+	if len(detail.Commits) != 1 {
+		t.Fatalf("expected 1 commit, got %d", len(detail.Commits))
+	}
+	commit := detail.Commits[0]
+	wantDate := time.Date(2026, 9, 1, 12, 0, 0, 0, time.UTC)
+	if commit.SHA != "abcdef1234567890" || commit.Author != "Dylan" || !commit.Date.Equal(wantDate) {
+		t.Errorf("unexpected commit: %+v", commit)
+	}
+}
+
+func TestDetailSortsLanguages(t *testing.T) {
+	client := detailServer(t, `{"Shell": 100, "Go": 900, "Makefile": 100}`, `[]`, http.StatusOK, nil)
+
+	detail, err := client.Detail(context.Background(), "dylan", "alpha")
+	if err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+
+	var names []string
+	for _, language := range detail.Languages {
+		names = append(names, language.Name)
+	}
+	// biggest first, ties broken by name
+	if got := strings.Join(names, ","); got != "Go,Makefile,Shell" {
+		t.Errorf("language order: got %s", got)
+	}
+}
+
+func TestDetailKeepsFirstLineOfCommitMessage(t *testing.T) {
+	client := detailServer(t, `{}`, oneCommitJSON, http.StatusOK, nil)
+
+	detail, err := client.Detail(context.Background(), "dylan", "alpha")
+	if err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+
+	if got := detail.Commits[0].Message; got != "fix: first line" {
+		t.Errorf("message: got %q", got)
+	}
+}
+
+func TestDetailAsksForFiveCommits(t *testing.T) {
+	var query string
+	client := detailServer(t, `{}`, `[]`, http.StatusOK, &query)
+
+	if _, err := client.Detail(context.Background(), "dylan", "alpha"); err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+
+	if !strings.Contains(query, "per_page=5") {
+		t.Errorf("expected per_page=5 in query, got %q", query)
+	}
+}
+
+func TestDetailEmptyRepoHasNoCommits(t *testing.T) {
+	// the api answers 409 when a repository has no commit yet
+	client := detailServer(t, `{}`, `{"message":"Git Repository is empty."}`, http.StatusConflict, nil)
+
+	detail, err := client.Detail(context.Background(), "dylan", "alpha")
+	if err != nil {
+		t.Fatalf("an empty repo should not be an error, got %v", err)
+	}
+	if len(detail.Commits) != 0 {
+		t.Errorf("expected no commits, got %d", len(detail.Commits))
+	}
+}
+
+func TestDetailNoLanguages(t *testing.T) {
+	client := detailServer(t, `{}`, `[]`, http.StatusOK, nil)
+
+	detail, err := client.Detail(context.Background(), "dylan", "alpha")
+	if err != nil {
+		t.Fatalf("detail: %v", err)
+	}
+	if len(detail.Languages) != 0 {
+		t.Errorf("expected no languages, got %+v", detail.Languages)
+	}
+}
+
+func TestDetailReturnsApiError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	client, err := newClientWithBaseURL("fake-token", server.URL+"/")
+	if err != nil {
+		t.Fatalf("build client: %v", err)
+	}
+
+	if _, err := client.Detail(context.Background(), "dylan", "alpha"); err == nil {
+		t.Fatal("expected an error on 404, got nil")
+	}
+}

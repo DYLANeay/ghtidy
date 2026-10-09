@@ -22,6 +22,7 @@ const (
 	modeConfirmDelete
 	modeRunning
 	modeReport
+	modeDetail
 )
 
 // Model is the whole state of the repo list screen
@@ -46,6 +47,12 @@ type Model struct {
 	resultsCh    <-chan actions.Result
 	// one line feedback shown under the list
 	notice string
+
+	// detail screen, the list state above is left untouched while it is open
+	detailRepo    github.Repo
+	detail        github.RepoDetail
+	detailLoading bool
+	detailErr     error
 }
 
 // NewModel builds the initial model, ready to fetch repositories
@@ -88,6 +95,11 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		// reload so the list shows the new state of the repos
 		return m, fetchRepos(m.service)
 
+	case detailLoadedMsg:
+		return m.handleDetailLoaded(msg)
+	case detailErrMsg:
+		return m.handleDetailErr(msg)
+
 	case tea.KeyMsg:
 		return m.updateKey(msg)
 	}
@@ -107,6 +119,8 @@ func (m Model) updateKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.updateRunning(msg)
 	case modeReport:
 		return m.updateReport(msg)
+	case modeDetail:
+		return m.updateDetail(msg)
 	}
 	return m.updateList(msg)
 }
@@ -131,6 +145,8 @@ func (m Model) updateList(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		if m.cursor < len(m.filtered)-1 {
 			m.cursor++
 		}
+	case "enter":
+		return m.openDetail()
 	case " ":
 		m.toggleCurrent()
 	case "a":
@@ -264,6 +280,8 @@ func (m Model) View() string {
 		b.WriteString(m.viewRunning())
 	case modeReport:
 		b.WriteString(m.viewReport())
+	case modeDetail:
+		b.WriteString(m.viewDetail())
 	default:
 		b.WriteString(m.viewList())
 	}
@@ -297,7 +315,7 @@ func (m Model) viewList() string {
 		fmt.Fprintf(&b, "filter: %s\n", m.filter)
 	} else {
 		fmt.Fprintf(&b, "%d selected\n", m.selectedCount())
-		b.WriteString("j/k or arrows: move | space: toggle | a: select all | A: clear | /: filter | esc: clear filter | q: quit\n")
+		b.WriteString("j/k or arrows: move | space: toggle | enter: details | a: select all | A: clear | /: filter | esc: clear filter | q: quit\n")
 		b.WriteString("r: archive | v: toggle visibility | d: delete\n")
 	}
 	return b.String()
