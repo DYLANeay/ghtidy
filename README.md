@@ -18,7 +18,9 @@ Select as many repositories as you want, then apply one action to all of them in
 
 ## Demo
 
-<!-- TODO: add a GIF recorded with vhs -->
+![ghtidy demo](assets/demo.gif)
+
+Recorded with [vhs](https://github.com/charmbracelet/vhs); source tape is [assets/demo.tape](assets/demo.tape).
 
 ## Install
 
