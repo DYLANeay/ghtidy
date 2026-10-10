@@ -12,26 +12,26 @@ Set TypingSpeed 60ms
 
 Type "ghtidy"
 Enter
-Sleep 4s
+Sleep 2s
 
 Down
 Down
-Sleep 500ms
+Sleep 300ms
 
 Type "/down"
-Sleep 1s
+Sleep 700ms
 
 Enter
-Sleep 400ms
+Sleep 200ms
 
 Space
-Sleep 400ms
+Sleep 200ms
 
 Type "r"
-Sleep 1s
-
-Type "n"
 Sleep 500ms
 
+Type "n"
+Sleep 200ms
+
 Enter
-Sleep 3s
+Sleep 1s
